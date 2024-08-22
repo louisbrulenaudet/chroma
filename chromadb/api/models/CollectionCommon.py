@@ -204,35 +204,6 @@ class CollectionCommon(Generic[ClientT]):
             ):
                 raise ValueError("You must provide either data or metadatas.")
 
-        valid_embeddings = record_set["embeddings"]
-        valid_metadatas = record_set["metadatas"]
-        valid_documents = record_set["documents"]
-        valid_images = record_set["images"]
-        valid_uris = record_set["uris"]
-        valid_ids = record_set["ids"]
-
-        # Check that, if they're provided, the lengths of the arrays match the length of ids
-        if valid_embeddings is not None and len(valid_embeddings) != len(valid_ids):
-            raise ValueError(
-                f"Number of embeddings {len(valid_embeddings)} must match number of ids {len(valid_ids)}"
-            )
-        if valid_metadatas is not None and len(valid_metadatas) != len(valid_ids):
-            raise ValueError(
-                f"Number of metadatas {len(valid_metadatas)} must match number of ids {len(valid_ids)}"
-            )
-        if valid_documents is not None and len(valid_documents) != len(valid_ids):
-            raise ValueError(
-                f"Number of documents {len(valid_documents)} must match number of ids {len(valid_ids)}"
-            )
-        if valid_images is not None and len(valid_images) != len(valid_ids):
-            raise ValueError(
-                f"Number of images {len(valid_images)} must match number of ids {len(valid_ids)}"
-            )
-        if valid_uris is not None and len(valid_uris) != len(valid_ids):
-            raise ValueError(
-                f"Number of uris {len(valid_uris)} must match number of ids {len(valid_ids)}"
-            )
-
     def _compute_embeddings(
         self,
         documents: Optional[Documents],
