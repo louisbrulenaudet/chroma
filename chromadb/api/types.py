@@ -127,7 +127,7 @@ class IncludeEnum(str, Enum):
 
 # Record set
 class RecordSet(TypedDict):
-    ids: IDs
+    ids: Optional[IDs]
     embeddings: Optional[Embeddings]
     metadatas: Optional[Metadatas]
     documents: Optional[Documents]
