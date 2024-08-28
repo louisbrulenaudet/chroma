@@ -46,7 +46,7 @@ from chromadb.api.types import (
     validate_where,
     validate_where_document,
     does_record_set_contain_any_data,
-    validate_metadatas,
+    validate_record_set,
 )
 
 # TODO: We should rename the types in chromadb.types to be Models where
@@ -179,14 +179,6 @@ class CollectionCommon(Generic[ClientT]):
         record_set: RecordSet,
         require_data: bool,
     ) -> None:
-        validate_ids(record_set["ids"])
-        validate_embeddings(record_set["embeddings"]) if record_set[
-            "embeddings"
-        ] is not None else None
-        validate_metadatas(record_set["metadatas"]) if record_set[
-            "metadatas"
-        ] is not None else None
-
         # Only one of documents or images can be provided
         if record_set["documents"] is not None and record_set["images"] is not None:
             raise ValueError("You can only provide documents or images, not both.")
