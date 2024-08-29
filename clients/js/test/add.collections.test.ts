@@ -64,7 +64,7 @@ describe("add collections", () => {
   });
 
   if (!process.env.OPENAI_API_KEY) {
-    test.skip("it should add OpenAI embeddings", async () => {});
+    test.skip("it should add OpenAI embeddings", async () => { });
   } else {
     test("it should add OpenAI embeddings", async () => {
       const embedder = new OpenAIEmbeddingFunction({
@@ -87,7 +87,7 @@ describe("add collections", () => {
   }
 
   if (!process.env.COHERE_API_KEY) {
-    test.skip("it should add Cohere embeddings", async () => {});
+    test.skip("it should add Cohere embeddings", async () => { });
   } else {
     test("it should add Cohere embeddings", async () => {
       const embedder = new CohereEmbeddingFunction({
@@ -133,11 +133,9 @@ describe("add collections", () => {
     const ids = IDS.concat(["test1"]);
     const embeddings = EMBEDDINGS.concat([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]);
     const metadatas = METADATAS.concat([{ test: "test1", float_value: 0.1 }]);
-    try {
+    expect(async () => {
       await collection.add({ ids, embeddings, metadatas });
-    } catch (e: any) {
-      expect(e.message).toMatch("duplicates");
-    }
+    }).rejects.toThrow("found duplicates");
   });
 
   test("should error on empty embedding", async () => {
@@ -145,15 +143,13 @@ describe("add collections", () => {
     const ids = ["id1"];
     const embeddings = [[]];
     const metadatas = [{ test: "test1", float_value: 0.1 }];
-    try {
+    expect(async () => {
       await collection.add({ ids, embeddings, metadatas });
-    } catch (e: any) {
-      expect(e.message).toMatch("got empty embedding at pos");
-    }
+    }).rejects.toThrow("got empty embedding at pos");
   });
 
   if (!process.env.OLLAMA_SERVER_URL) {
-    test.skip("it should use ollama EF, OLLAMA_SERVER_URL not defined", async () => {});
+    test.skip("it should use ollama EF, OLLAMA_SERVER_URL not defined", async () => { });
   } else {
     test("it should use ollama EF", async () => {
       const embedder = new OllamaEmbeddingFunction({
