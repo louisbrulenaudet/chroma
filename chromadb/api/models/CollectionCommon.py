@@ -195,6 +195,8 @@ class CollectionCommon(Generic[ClientT]):
                 record_set, include=["embeddings", "documents", "images", "metadatas"]
             ):
                 raise ValueError("You must provide either data or metadatas.")
+        
+        validate_record_set(record_set)
 
     def _compute_embeddings(
         self,
