@@ -433,8 +433,7 @@ class CollectionCommon(Generic[ClientT]):
             require_data=True,
         )
 
-        if unpacked_record_set["embeddings"] is None:
-            unpacked_record_set["embeddings"] = self._compute_embeddings(
+        unpacked_record_set["embeddings"] = self._compute_embeddings(
                 documents=unpacked_record_set["documents"],
                 images=unpacked_record_set["images"],
                 uris=None,
