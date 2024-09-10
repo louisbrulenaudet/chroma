@@ -64,7 +64,7 @@ describe("add collections", () => {
   });
 
   if (!process.env.OPENAI_API_KEY) {
-    test.skip("it should add OpenAI embeddings", async () => { });
+    test.skip("it should add OpenAI embeddings", async () => {});
   } else {
     test("it should add OpenAI embeddings", async () => {
       const embedder = new OpenAIEmbeddingFunction({
@@ -87,7 +87,7 @@ describe("add collections", () => {
   }
 
   if (!process.env.COHERE_API_KEY) {
-    test.skip("it should add Cohere embeddings", async () => { });
+    test.skip("it should add Cohere embeddings", async () => {});
   } else {
     test("it should add Cohere embeddings", async () => {
       const embedder = new CohereEmbeddingFunction({
@@ -149,7 +149,7 @@ describe("add collections", () => {
   });
 
   if (!process.env.OLLAMA_SERVER_URL) {
-    test.skip("it should use ollama EF, OLLAMA_SERVER_URL not defined", async () => { });
+    test.skip("it should use ollama EF, OLLAMA_SERVER_URL not defined", async () => {});
   } else {
     test("it should use ollama EF", async () => {
       const embedder = new OllamaEmbeddingFunction({
