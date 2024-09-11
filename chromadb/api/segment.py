@@ -624,7 +624,6 @@ class SegmentAPI(ServerAPI):
                 """
             )
 
-        coll = self._get_collection(collection_id)
         self._manager.hint_use_collection(collection_id, t.Operation.DELETE)
 
         if (where or where_document) or not ids:
@@ -638,19 +637,6 @@ class SegmentAPI(ServerAPI):
 
         if len(ids_to_delete) == 0:
             return []
-
-        self._validate_record_set(
-            collection=coll,
-            record_set={
-                "ids": ids_to_delete,
-                "embeddings": None,
-                "documents": None,
-                "uris": None,
-                "metadatas": None,
-                "images": None,
-            },
-            require_data=False,
-        )
 
         records_to_submit = list(
             _records(operation=t.Operation.DELETE, ids=ids_to_delete)
@@ -852,7 +838,7 @@ class SegmentAPI(ServerAPI):
         add_attributes_to_current_span({"collection_id": str(collection["id"])})
 
         try:
-            validate_record_set(record_set)
+            validate_record_set(record_set, require_data=require_data)
             validate_batch(
                 (
                     record_set["ids"],

@@ -802,10 +802,6 @@ def test_autocasting_validate_embeddings_for_compatible_types(
     supported_types: List[Any],
 ) -> None:
     embds = strategies.create_embeddings(10, 10, supported_types)
-<<<<<<< HEAD
-
-=======
->>>>>>> c9b8f2d7 (remove normalize embeddings func)
     validated_embeddings = validate_embeddings(maybe_cast_one_to_many_embedding(embds))  # type: ignore[arg-type]
     assert all(
         [
