@@ -434,10 +434,10 @@ class CollectionCommon(Generic[ClientT]):
         )
 
         unpacked_record_set["embeddings"] = self._compute_embeddings(
-                documents=unpacked_record_set["documents"],
-                images=unpacked_record_set["images"],
-                uris=None,
-            )
+            documents=unpacked_record_set["documents"],
+            images=unpacked_record_set["images"],
+            uris=None,
+        )
 
         return unpacked_record_set
 
