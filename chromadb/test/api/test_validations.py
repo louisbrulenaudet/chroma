@@ -1,14 +1,13 @@
 import pytest
 import numpy as np
 from typing import cast
-import numpy as np
 from chromadb.api.types import (
     Embeddings,
     IDs,
     RecordSet,
     does_record_set_contain_any_data,
     maybe_cast_one_to_many_embedding,
-    validate_embeddings, 
+    validate_embeddings,
     validate_ids,
     validate_record_set_consistency,
 )
