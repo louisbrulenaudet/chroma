@@ -1,4 +1,5 @@
 import pytest
+<<<<<<< HEAD
 import numpy as np
 from chromadb.api.types import (
     RecordSet,
@@ -7,6 +8,15 @@ from chromadb.api.types import (
     validate_embeddings, 
     Embeddings
 )
+=======
+from chromadb.api.types import (
+    RecordSet,
+    does_record_set_contain_any_data,
+    validate_embeddings,
+    Embeddings,
+)
+
+>>>>>>> cecf1916 (correct functions)
 
 def test_does_record_set_contain_any_data() -> None:
     valid_record_set: RecordSet = {
