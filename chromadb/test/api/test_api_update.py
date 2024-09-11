@@ -2,7 +2,7 @@ import pytest
 from chromadb.api import ClientAPI
 
 
-def test_update_query(client: ClientAPI) -> None:
+def test_update_query_with_none_data(client: ClientAPI) -> None:
     client.reset()
     collection = client.create_collection("test_update_query")
 

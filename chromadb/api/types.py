@@ -60,12 +60,25 @@ def maybe_cast_one_to_many_embedding(
     if target is None:
         return None
 
-    if isinstance(target, List):
+    embeddings_list = target
+    if isinstance(target, np.ndarray):
+        embeddings_list = target.tolist()
+
+    if isinstance(embeddings_list, List):
         # One Embedding
-        if isinstance(target[0], (int, float)):
-            return cast(Embeddings, [target])
-    # Already a sequence
-    return cast(Embeddings, target)
+        if len(embeddings_list) == 0:
+            raise ValueError(
+                "Expected embeddings to be a list or a numpy array with at least one item"
+            )
+
+        if isinstance(embeddings_list[0], (int, float)):
+            return cast(Embeddings, [embeddings_list])
+    else:
+        raise ValueError(
+            f"Expected embeddings to be a list or a numpy array, got {type(embeddings_list).__name__}"
+        )
+
+    return cast(Embeddings, embeddings_list)
 
 
 # Metadatas
@@ -123,6 +136,7 @@ class RecordSet(TypedDict):
 
 
 def does_record_set_contain_any_data(record_set: RecordSet, include: List[str]) -> bool:
+    """This function checks if the record set contains any data for the given keys"""
     if len(include) == 0:
         raise ValueError("Expected include to be a non-empty list")
 

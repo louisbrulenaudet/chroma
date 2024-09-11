@@ -25,7 +25,6 @@ from chromadb.api.types import (
     Include,
     Loadable,
     Metadata,
-    Metadatas,
     Document,
     Documents,
     Image,
@@ -41,13 +40,13 @@ from chromadb.api.types import (
     validate_ids,
     validate_include,
     validate_metadata,
-    validate_metadatas,
     validate_embeddings,
     validate_embedding_function,
     validate_n_results,
     validate_where,
     validate_where_document,
     does_record_set_contain_any_data,
+    validate_metadatas,
 )
 
 # TODO: We should rename the types in chromadb.types to be Models where
@@ -175,54 +174,42 @@ class CollectionCommon(Generic[ClientT]):
             "uris": unpacked_uris,
         }
 
+    @staticmethod
     def _validate_record_set(
-        self,
-        ids: IDs,
-        embeddings: Optional[Embeddings],
-        metadatas: Optional[Metadatas],
-        documents: Optional[Documents],
-        images: Optional[Images],
-        uris: Optional[URIs],
-        require_embeddings_or_data: bool = True,
+        record_set: RecordSet,
+        require_data: bool,
     ) -> None:
-        valid_ids = validate_ids(ids)
-        valid_embeddings = (
-            validate_embeddings(embeddings) if embeddings is not None else None
-        )
-        valid_metadatas = (
-            validate_metadatas(metadatas) if metadatas is not None else None
-        )
+        validate_ids(record_set["ids"])
+        validate_embeddings(record_set["embeddings"]) if record_set[
+            "embeddings"
+        ] is not None else None
+        validate_metadatas(record_set["metadatas"]) if record_set[
+            "metadatas"
+        ] is not None else None
 
-        # No additional validation needed for documents, images, or uris
-        valid_documents = documents
-        valid_images = images
-        valid_uris = uris
+        # Only one of documents or images can be provided
+        if record_set["documents"] is not None and record_set["images"] is not None:
+            raise ValueError("You can only provide documents or images, not both.")
 
-        # Check that one of embeddings or ducuments or images is provided
-        if require_embeddings_or_data:
-            if (
-                valid_embeddings is None
-                and valid_documents is None
-                and valid_images is None
-                and valid_uris is None
+        if require_data:
+            if not does_record_set_contain_any_data(
+                record_set, include=["embeddings", "documents", "images", "uris"]
             ):
                 raise ValueError(
-                    "You must provide embeddings, documents, images, or uris."
+                    "You must provide embeddings, documents, images, or URIs."
                 )
         else:
-            # will replace this with does_record_set_contain_any_data in the following PR
-            if (
-                valid_embeddings is None
-                and valid_documents is None
-                and valid_images is None
-                and valid_uris is None
-                and valid_metadatas is None
+            if not does_record_set_contain_any_data(
+                record_set, include=["embeddings", "documents", "images", "metadatas"]
             ):
                 raise ValueError("You must provide either data or metadatas.")
 
-        # Only one of documents or images can be provided
-        if valid_documents is not None and valid_images is not None:
-            raise ValueError("You can only provide documents or images, not both.")
+        valid_embeddings = record_set["embeddings"]
+        valid_metadatas = record_set["metadatas"]
+        valid_documents = record_set["documents"]
+        valid_images = record_set["images"]
+        valid_uris = record_set["uris"]
+        valid_ids = record_set["ids"]
 
         # Check that, if they're provided, the lengths of the arrays match the length of ids
         if valid_embeddings is not None and len(valid_embeddings) != len(valid_ids):
@@ -362,13 +349,7 @@ class CollectionCommon(Generic[ClientT]):
         valid_include = validate_include(include, allow_distances=True)
         valid_n_results = validate_n_results(n_results)
 
-        embeddings_to_normalize = maybe_cast_one_to_many_embedding(query_embeddings)
-        normalized_embeddings = (
-            self._normalize_embeddings(embeddings_to_normalize)
-            if embeddings_to_normalize is not None
-            else None
-        )
-
+        normalized_embeddings = maybe_cast_one_to_many_embedding(query_embeddings)
         valid_query_embeddings = None
         if normalized_embeddings is not None:
             valid_query_embeddings = validate_embeddings(normalized_embeddings)
@@ -445,39 +426,19 @@ class CollectionCommon(Generic[ClientT]):
             uris=uris,
         )
 
-        normalized_embeddings = (
-            self._normalize_embeddings(unpacked_record_set["embeddings"])
-            if unpacked_record_set["embeddings"] is not None
-            else None
-        )
-
         self._validate_record_set(
-            ids=unpacked_record_set["ids"],
-            embeddings=normalized_embeddings,
-            metadatas=unpacked_record_set["metadatas"],
-            documents=unpacked_record_set["documents"],
-            images=unpacked_record_set["images"],
-            uris=unpacked_record_set["uris"],
+            unpacked_record_set,
+            require_data=True,
         )
 
-        prepared_embeddings = (
-            self._compute_embeddings(
+        if unpacked_record_set["embeddings"] is None:
+            unpacked_record_set["embeddings"] = self._compute_embeddings(
                 documents=unpacked_record_set["documents"],
                 images=unpacked_record_set["images"],
                 uris=unpacked_record_set["uris"],
             )
-            if normalized_embeddings is None
-            else normalized_embeddings
-        )
 
-        return {
-            "ids": unpacked_record_set["ids"],
-            "embeddings": prepared_embeddings,
-            "metadatas": unpacked_record_set["metadatas"],
-            "documents": unpacked_record_set["documents"],
-            "images": unpacked_record_set["images"],
-            "uris": unpacked_record_set["uris"],
-        }
+        return unpacked_record_set
 
     def _process_upsert_request(
         self,
@@ -502,37 +463,19 @@ class CollectionCommon(Generic[ClientT]):
             uris=uris,
         )
 
-        normalized_embeddings = (
-            self._normalize_embeddings(unpacked_record_set["embeddings"])
-            if unpacked_record_set["embeddings"] is not None
-            else None
-        )
-
         self._validate_record_set(
-            ids=unpacked_record_set["ids"],
-            embeddings=normalized_embeddings,
-            metadatas=unpacked_record_set["metadatas"],
-            documents=unpacked_record_set["documents"],
-            images=unpacked_record_set["images"],
-            uris=unpacked_record_set["uris"],
+            unpacked_record_set,
+            require_data=True,
         )
 
-        prepared_embeddings = normalized_embeddings
-        if prepared_embeddings is None:
-            prepared_embeddings = self._compute_embeddings(
+        if unpacked_record_set["embeddings"] is None:
+            unpacked_record_set["embeddings"] = self._compute_embeddings(
                 documents=unpacked_record_set["documents"],
                 images=unpacked_record_set["images"],
                 uris=None,
             )
 
-        return {
-            "ids": unpacked_record_set["ids"],
-            "embeddings": prepared_embeddings,
-            "metadatas": unpacked_record_set["metadatas"],
-            "documents": unpacked_record_set["documents"],
-            "images": unpacked_record_set["images"],
-            "uris": unpacked_record_set["uris"],
-        }
+        return unpacked_record_set
 
     def _process_update_request(
         self,
@@ -557,40 +500,23 @@ class CollectionCommon(Generic[ClientT]):
             uris=uris,
         )
 
-        normalized_embeddings = (
-            self._normalize_embeddings(unpacked_record_set["embeddings"])
-            if unpacked_record_set["embeddings"] is not None
-            else None
-        )
-
         self._validate_record_set(
-            ids=unpacked_record_set["ids"],
-            embeddings=normalized_embeddings,
-            metadatas=unpacked_record_set["metadatas"],
-            documents=unpacked_record_set["documents"],
-            images=unpacked_record_set["images"],
-            uris=unpacked_record_set["uris"],
-            require_embeddings_or_data=False,
+            unpacked_record_set,
+            require_data=False,
         )
 
-        prepared_embeddings = normalized_embeddings
-        if prepared_embeddings is None and does_record_set_contain_any_data(
+        if unpacked_record_set[
+            "embeddings"
+        ] is None and does_record_set_contain_any_data(
             unpacked_record_set, include=["documents", "images"]
         ):
-            prepared_embeddings = self._compute_embeddings(
+            unpacked_record_set["embeddings"] = self._compute_embeddings(
                 documents=unpacked_record_set["documents"],
                 images=unpacked_record_set["images"],
                 uris=None,
             )
 
-        return {
-            "ids": unpacked_record_set["ids"],
-            "embeddings": prepared_embeddings,
-            "metadatas": unpacked_record_set["metadatas"],
-            "documents": unpacked_record_set["documents"],
-            "images": unpacked_record_set["images"],
-            "uris": unpacked_record_set["uris"],
-        }
+        return unpacked_record_set
 
     def _validate_and_prepare_delete_request(
         self,
@@ -605,17 +531,6 @@ class CollectionCommon(Generic[ClientT]):
         )
 
         return (ids, where, where_document)
-
-    @staticmethod
-    def _normalize_embeddings(
-        embeddings: Union[  # type: ignore[type-arg]
-            OneOrMany[Embedding],
-            OneOrMany[np.ndarray],
-        ]
-    ) -> Embeddings:
-        if isinstance(embeddings, np.ndarray):
-            return embeddings.tolist()  # type: ignore
-        return embeddings  # type: ignore
 
     def _embed(self, input: Any) -> Embeddings:
         if self._embedding_function is None:
