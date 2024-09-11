@@ -1,6 +1,7 @@
 import pytest
 from chromadb.api import ClientAPI
 
+
 def test_update_query_with_none_data(client: ClientAPI) -> None:
     client.reset()
     collection = client.create_collection("test_update_query")
@@ -16,6 +17,8 @@ def test_update_query_with_none_data(client: ClientAPI) -> None:
         collection.update(**invalid_updated_records)  # type: ignore[arg-type]
 
     assert "You must provide either data or metadatas" in str(e)
+
+
 def test_update_with_none_ids(client: ClientAPI) -> None:
     client.reset()
     collection = client.create_collection("test")

@@ -15,6 +15,7 @@ from chromadb.api.types import (
 
 import chromadb.errors as errors
 
+
 def test_does_record_set_contain_any_data() -> None:
     valid_record_set: RecordSet = {
         "ids": ["1", "2", "3"],
