@@ -215,7 +215,7 @@ class CollectionCommon(Generic[ClientT]):
         else:
             if uris is None:
                 raise ValueError(
-                    "You must provide either embeddings, documents, images, or uris."
+                    "You must provide either embeddings, documents, images, or URIs."
                 )
             if self._data_loader is None:
                 raise ValueError(
@@ -430,7 +430,7 @@ class CollectionCommon(Generic[ClientT]):
         )
 
         if unpacked_record_set["ids"] is None:
-            raise ValueError("You must provide ids.")
+            raise ValueError("You must provide ids when upserting.")
 
         self._validate_record_set(
             unpacked_record_set,
@@ -470,7 +470,7 @@ class CollectionCommon(Generic[ClientT]):
         )
 
         if unpacked_record_set["ids"] is None:
-            raise ValueError("You must provide ids.")
+            raise ValueError("You must provide ids when updating.")
 
         self._validate_record_set(
             unpacked_record_set,
