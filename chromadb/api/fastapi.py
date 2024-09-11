@@ -425,6 +425,8 @@ class FastAPI(BaseHTTPClient, ServerAPI):
 
         validate_batch_size(record_set, {"max_batch_size": self.get_max_batch_size()})
 
+        # This differs from the request for update and upsert because we want to return the ids,
+        # which are generated at the server (segment)
         resp_json = self._make_request(
             "post",
             "/collections/" + str(collection_id) + "/add",
