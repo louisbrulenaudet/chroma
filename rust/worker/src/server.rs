@@ -19,7 +19,7 @@ use chroma_types::chroma_proto::{
 use chroma_types::chroma_proto::{
     GetVectorsRequest, GetVectorsResponse, QueryVectorsRequest, QueryVectorsResponse,
 };
-use chroma_types::{MetadataValue, ScalarEncoding};
+use chroma_types::{MetadataValue, ScalarEncoding, Where};
 use std::collections::HashMap;
 use tokio::signal::unix::{signal, SignalKind};
 use tonic::{transport::Server, Request, Response, Status};
@@ -414,6 +414,12 @@ impl WorkerServer {
             None => None,
         };
 
+        let clause = match (where_clause, where_document_clause) {
+            (Some(wc), Some(wdc)) => Some(Where::conjunction(vec![wc, wdc])),
+            (Some(c), None) | (None, Some(c)) => Some(c),
+            _ => None,
+        };
+
         let orchestrator = MetadataQueryOrchestrator::new(
             system.clone(),
             &segment_uuid,
@@ -423,8 +429,7 @@ impl WorkerServer {
             self.sysdb.clone(),
             dispatcher.clone(),
             self.blockfile_provider.clone(),
-            where_clause,
-            where_document_clause,
+            clause,
             request.offset,
             request.limit,
             request.include_metadata,

@@ -112,7 +112,7 @@ pub enum MetadataValue {
 
 impl Eq for MetadataValue {}
 
-impl Ord for MetadataValue {
+impl Ord for &MetadataValue {
     fn cmp(&self, other: &Self) -> Ordering {
         self.partial_cmp(other).unwrap_or(Ordering::Equal)
     }
@@ -382,18 +382,6 @@ pub enum MetadataSetValue {
     Int(Vec<i64>),
     Float(Vec<f64>),
     Str(Vec<String>),
-}
-
-impl MetadataSetValue {
-    pub fn into_vec(&self) -> Vec<MetadataValue> {
-        use MetadataSetValue::*;
-        match self {
-            Bool(vec) => vec.iter().map(|b| MetadataValue::Bool(*b)).collect(),
-            Int(vec) => vec.iter().map(|i| MetadataValue::Int(*i)).collect(),
-            Float(vec) => vec.iter().map(|f| MetadataValue::Float(*f)).collect(),
-            Str(vec) => vec.iter().map(|s| MetadataValue::Str(s.clone())).collect(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
