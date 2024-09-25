@@ -146,11 +146,11 @@ impl<'me> MetadataLogReader<'me> {
         let mut uid_to_oid = BTreeMap::new();
         for (log, _) in logs.iter() {
             domain.insert(log.offset_id);
-            uid_to_oid.insert(log.merged_user_id_ref(), log.offset_id);
             if !matches!(
                 log.final_operation,
                 MaterializedLogOperation::DeleteExisting
             ) {
+                uid_to_oid.insert(log.merged_user_id_ref(), log.offset_id);
                 let log_meta = log.merged_metadata_ref();
                 for (key, val) in log_meta.into_iter() {
                     compact_metadata
@@ -204,8 +204,8 @@ impl<'me> MetadataLogReader<'me> {
             .collect()
     }
 
-    pub(crate) fn domain(&'me self) -> &'me RoaringBitmap {
-        &self.domain
+    pub(crate) fn active_domain(&'me self) -> RoaringBitmap {
+        self.uid_to_oid.values().collect()
     }
 }
 
@@ -491,10 +491,9 @@ impl Operator<MetadataFilteringInput, MetadataFilteringOutput> for MetadataFilte
         };
 
         // Filter on log and compact segment, then merge the results with user provided ids
-        let log_domain = metadata_log_reader.domain().clone();
         let mut filtered_log_oids = clause.eval(&log_metadata_provider).await?;
-        let mut filtered_compact_oids =
-            clause.eval(&compact_metadata_provider).await? & Exclude(log_domain.clone());
+        let mut filtered_compact_oids = clause.eval(&compact_metadata_provider).await?
+            & Exclude(metadata_log_reader.domain.clone());
 
         if let Some(uids) = input.query_ids.as_ref() {
             filtered_log_oids =
@@ -512,7 +511,7 @@ impl Operator<MetadataFilteringInput, MetadataFilteringOutput> for MetadataFilte
 
         let materialized_log_oids = match filtered_log_oids {
             Include(rbm) => rbm,
-            Exclude(rbm) => log_domain - rbm,
+            Exclude(rbm) => metadata_log_reader.active_domain() - rbm,
         };
 
         let materialized_compact_oids = match filtered_compact_oids {
@@ -1165,5 +1164,188 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_limit_offset() {}
+    async fn test_composite_filter() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::Local(LocalStorage::new(tmp_dir.path().to_str().unwrap()));
+        let block_cache = Cache::new(&CacheConfig::Unbounded(UnboundedCacheConfig {}));
+        let sparse_index_cache = Cache::new(&CacheConfig::Unbounded(UnboundedCacheConfig {}));
+        let arrow_blockfile_provider = ArrowBlockfileProvider::new(
+            storage,
+            TEST_MAX_BLOCK_SIZE_BYTES,
+            block_cache,
+            sparse_index_cache,
+        );
+        let blockfile_provider =
+            BlockfileProvider::ArrowBlockfileProvider(arrow_blockfile_provider);
+        let mut record_segment = chroma_types::Segment {
+            id: Uuid::from_str("00000000-0000-0000-0000-000000000000").expect("parse error"),
+            r#type: chroma_types::SegmentType::BlockfileRecord,
+            scope: chroma_types::SegmentScope::RECORD,
+            collection: Uuid::from_str("00000000-0000-0000-0000-000000000000")
+                .expect("parse error"),
+            metadata: None,
+            file_path: HashMap::new(),
+        };
+        let mut metadata_segment = chroma_types::Segment {
+            id: Uuid::from_str("00000000-0000-0000-0000-000000000001").expect("parse error"),
+            r#type: chroma_types::SegmentType::BlockfileMetadata,
+            scope: chroma_types::SegmentScope::METADATA,
+            collection: Uuid::from_str("00000000-0000-0000-0000-000000000000")
+                .expect("parse error"),
+            metadata: None,
+            file_path: HashMap::new(),
+        };
+        {
+            let segment_writer =
+                RecordSegmentWriter::from_segment(&record_segment, &blockfile_provider)
+                    .await
+                    .expect("Error creating segment writer");
+            let mut metadata_writer =
+                MetadataSegmentWriter::from_segment(&metadata_segment, &blockfile_provider)
+                    .await
+                    .expect("Error creating segment writer");
+            let mut logs = Vec::new();
+            for i in 0..60 {
+                let mut meta = HashMap::new();
+                if i % 2 == 0 {
+                    meta.insert("even".to_string(), UpdateMetadataValue::Bool(i % 4 == 0));
+                }
+                meta.insert(
+                    format!("mod_three_{}", i % 3),
+                    UpdateMetadataValue::Float(i as f64),
+                );
+                meta.insert("mod_five".to_string(), UpdateMetadataValue::Int(i % 5));
+                let emb = (0..3).map(|o| (3 * i + o) as f32).collect();
+                logs.push(LogRecord {
+                    log_offset: i,
+                    record: OperationRecord {
+                        id: format!("id_{}", i),
+                        embedding: Some(emb),
+                        encoding: None,
+                        metadata: Some(meta),
+                        document: Some(format!("-->{}<--", i)),
+                        operation: Operation::Add,
+                    },
+                });
+            }
+            let data: Chunk<LogRecord> = Chunk::new(logs.into());
+            let mut record_segment_reader: Option<RecordSegmentReader> = None;
+            match RecordSegmentReader::from_segment(&record_segment, &blockfile_provider).await {
+                Ok(reader) => {
+                    record_segment_reader = Some(reader);
+                }
+                Err(e) => {
+                    match *e {
+                        // Uninitialized segment is fine and means that the record
+                        // segment is not yet initialized in storage.
+                        RecordSegmentReaderCreationError::UninitializedSegment => {
+                            record_segment_reader = None;
+                        }
+                        RecordSegmentReaderCreationError::BlockfileOpenError(_) => {
+                            panic!("Error creating record segment reader");
+                        }
+                        RecordSegmentReaderCreationError::InvalidNumberOfFiles => {
+                            panic!("Error creating record segment reader");
+                        }
+                    };
+                }
+            };
+            let materializer = LogMaterializer::new(record_segment_reader, data, None);
+            let mat_records = materializer
+                .materialize()
+                .await
+                .expect("Log materialization failed");
+            metadata_writer
+                .apply_materialized_log_chunk(mat_records.clone())
+                .await
+                .expect("Apply materialized log to metadata segment failed");
+            metadata_writer
+                .write_to_blockfiles()
+                .await
+                .expect("Write to blockfiles for metadata writer failed");
+            segment_writer
+                .apply_materialized_log_chunk(mat_records)
+                .await
+                .expect("Apply materialized log to record segment failed");
+            let record_flusher = segment_writer
+                .commit()
+                .expect("Commit for segment writer failed");
+            let metadata_flusher = metadata_writer
+                .commit()
+                .expect("Commit for metadata writer failed");
+            record_segment.file_path = record_flusher
+                .flush()
+                .await
+                .expect("Flush record segment writer failed");
+            metadata_segment.file_path = metadata_flusher
+                .flush()
+                .await
+                .expect("Flush metadata segment writer failed");
+        }
+        let mut logs = Vec::new();
+        for i in 60..120 {
+            let mut meta = HashMap::new();
+            if i % 2 == 0 {
+                meta.insert("even".to_string(), UpdateMetadataValue::Bool(i % 4 == 0));
+            }
+            meta.insert(
+                format!("mod_three_{}", i % 3),
+                UpdateMetadataValue::Float(i as f64),
+            );
+            meta.insert("mod_five".to_string(), UpdateMetadataValue::Int(i % 5));
+            let emb = (0..3).map(|o| (3 * i + o) as f32).collect();
+            logs.push(LogRecord {
+                log_offset: i,
+                record: OperationRecord {
+                    id: format!("id_{}", i),
+                    embedding: Some(emb),
+                    encoding: None,
+                    metadata: Some(meta),
+                    document: Some(format!("-->{}<--", i)),
+                    operation: Operation::Add,
+                },
+            });
+        }
+        for i in 0..20 {
+            logs.push(LogRecord {
+                log_offset: 120 + i,
+                record: OperationRecord {
+                    id: format!("id_{}", i * 6),
+                    embedding: None,
+                    encoding: None,
+                    metadata: None,
+                    document: None,
+                    operation: Operation::Delete,
+                },
+            });
+        }
+        let data: Chunk<LogRecord> = Chunk::new(logs.into());
+        let operator = MetadataFilteringOperator::new();
+        let where_clause: Where = Where::DirectWhereComparison(DirectWhereComparison {
+            key: String::from("bye"),
+            comp: WhereComparison::Primitive(
+                PrimitiveOperator::Equal,
+                MetadataValue::Str(String::from("world")),
+            ),
+        });
+
+        let input = MetadataFilteringInput::new(
+            blockfile_provider.clone(),
+            record_segment.clone(),
+            metadata_segment.clone(),
+            data.clone(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let res = operator
+            .run(&input)
+            .await
+            .expect("Error during running of operator");
+        assert_eq!(100, res.offset_ids.len());
+        assert_eq!(res.offset_ids, (1..=120).filter(|i| i % 6 != 1).collect());
+    }
 }
