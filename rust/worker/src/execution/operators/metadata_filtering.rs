@@ -16,8 +16,8 @@ use chroma_error::{ChromaError, ErrorCodes};
 use chroma_index::metadata::types::MetadataIndexError;
 use chroma_types::{
     BooleanOperator, Chunk, DirectDocumentComparison, DirectWhereComparison, DocumentOperator,
-    LogRecord, MaterializedLogOperation, MetadataValue, PrimitiveOperator, Segment, SetOperator,
-    SignedRoaringBitmap, Where, WhereChildren, WhereComparison,
+    LogRecord, MaterializedLogOperation, MetadataSetValue, MetadataValue, PrimitiveOperator,
+    Segment, SetOperator, SignedRoaringBitmap, Where, WhereChildren, WhereComparison,
 };
 use roaring::RoaringBitmap;
 use thiserror::Error;
@@ -31,21 +31,18 @@ use tracing::{trace, Instrument, Span};
 /// - `blockfile_provider` / `record_segment` / `metadata_segment`: handles to the underlying data.
 /// - `log_record`: the chunk of log that is not yet compacted, representing the latest updates.
 /// - `query_ids`: user provided ids, which must be a superset of returned documents.
-/// - `where_clause`: a boolean predicate on the metadata of the document.
-/// - `where_document_clause`: a boolean predicate on the content of the document.
+/// - `where_clause`: a boolean predicate on the metadata and the content of the document.
 /// - `offset`: the number of records with smallest offset ids to skip, if specified
 /// - `limit`: the number of records with smallest offset ids to take after the skip, if specified
 ///
 /// # Output
-/// - `log_record`: the same as `log_record` in the input.
-/// - `log_mask`: the offset ids in the log that matches the criteria in the input.
-/// - `offset_ids`: the offset ids (in both log and compact storage) that matches the criteria in the input.
+/// - `log_record`: the same `log_record` from the input.
+/// - `log_mask`: the matching offset ids in the log.
+/// - `offset_ids`: the matching offset ids (in both log and compact storage).
 ///
 /// # Note
 /// - The `MetadataProvider` enum can be viewed as an universal interface for the metadata and document index.
-/// - In the input, `where_clause` and `where_document_clause` is represented with the same enum, as they share
-///   the same evaluation process. In the future we can trivially merge them together into a single field.
-/// - In the output, the `log_mask` should be a subset of `offset_ids`
+/// - In the output, `log_mask` should be a subset of `offset_ids`
 
 #[derive(Debug)]
 pub(crate) struct MetadataFilteringOperator {}
@@ -64,7 +61,6 @@ pub(crate) struct MetadataFilteringInput {
     log_record: Chunk<LogRecord>,
     query_ids: Option<Vec<String>>,
     where_clause: Option<Where>,
-    where_document_clause: Option<Where>,
     offset: Option<u32>,
     limit: Option<u32>,
 }
@@ -77,7 +73,6 @@ impl MetadataFilteringInput {
         log_record: Chunk<LogRecord>,
         query_ids: Option<Vec<String>>,
         where_clause: Option<Where>,
-        where_document_clause: Option<Where>,
         offset: Option<u32>,
         limit: Option<u32>,
     ) -> Self {
@@ -88,7 +83,6 @@ impl MetadataFilteringInput {
             log_record,
             query_ids,
             where_clause,
-            where_document_clause,
             offset,
             limit,
         }
@@ -132,7 +126,7 @@ impl ChromaError for MetadataFilteringError {
 }
 
 pub(crate) struct MetadataLogReader<'me> {
-    compact_metadata: BTreeMap<&'me str, BTreeMap<MetadataValue, RoaringBitmap>>,
+    compact_metadata: BTreeMap<&'me str, BTreeMap<&'me MetadataValue, RoaringBitmap>>,
     document: BTreeMap<u32, &'me str>,
     domain: RoaringBitmap,
     uid_to_oid: BTreeMap<&'me str, u32>,
@@ -156,7 +150,7 @@ impl<'me> MetadataLogReader<'me> {
                     compact_metadata
                         .entry(key)
                         .or_default()
-                        .entry(val.clone())
+                        .entry(val)
                         .or_default()
                         .insert(log.offset_id);
                 }
@@ -182,15 +176,15 @@ impl<'me> MetadataLogReader<'me> {
         use PrimitiveOperator::*;
         if let Some(btm) = self.compact_metadata.get(key) {
             let bounds = match op {
-                Equal => (Included(val), Included(val)),
+                Equal => (Included(&val), Included(&val)),
                 NotEqual => return Err(MetadataFilteringError::InvalidInput),
-                GreaterThan => (Excluded(val), Unbounded),
-                GreaterThanOrEqual => (Included(val), Unbounded),
-                LessThan => (Unbounded, Excluded(val)),
-                LessThanOrEqual => (Unbounded, Included(val)),
+                GreaterThan => (Excluded(&val), Unbounded),
+                GreaterThanOrEqual => (Included(&val), Unbounded),
+                LessThan => (Unbounded, Excluded(&val)),
+                LessThanOrEqual => (Unbounded, Included(&val)),
             };
             Ok(btm
-                .range(bounds)
+                .range::<&MetadataValue, _>(bounds)
                 .map(|(_, v)| v)
                 .fold(RoaringBitmap::new(), BitOr::bitor))
         } else {
@@ -324,6 +318,7 @@ impl<'me> RoaringMetadataFilter<'me> for DirectWhereComparison {
         &'me self,
         meta_provider: &MetadataProvider<'me>,
     ) -> Result<SignedRoaringBitmap, MetadataFilteringError> {
+        use MetadataSetValue::*;
         use PrimitiveOperator::*;
         use SetOperator::*;
         use SignedRoaringBitmap::*;
@@ -342,35 +337,32 @@ impl<'me> RoaringMetadataFilter<'me> for DirectWhereComparison {
                     ),
                 }
             }
-            WhereComparison::Set(set_operator, metadata_set_value) => match set_operator {
-                In => {
-                    Box::pin(
-                        Where::disjunction(
-                            metadata_set_value
-                                .into_vec()
-                                .into_iter()
-                                .map(|mv| {
-                                    Where::DirectWhereComparison(DirectWhereComparison {
-                                        key: self.key.clone(),
-                                        comp: WhereComparison::Primitive(Equal, mv.clone()),
-                                    })
-                                })
-                                .collect(),
-                        )
-                        .eval(meta_provider),
-                    )
-                    .await?
+            WhereComparison::Set(set_operator, metadata_set_value) => {
+                let child_values: Vec<_> = match metadata_set_value {
+                    Bool(vec) => vec.iter().map(|b| MetadataValue::Bool(*b)).collect(),
+                    Int(vec) => vec.iter().map(|i| MetadataValue::Int(*i)).collect(),
+                    Float(vec) => vec.iter().map(|f| MetadataValue::Float(*f)).collect(),
+                    Str(vec) => vec.iter().map(|s| MetadataValue::Str(s.clone())).collect(),
+                };
+                let mut child_evals = Vec::with_capacity(child_values.len());
+                for val in child_values {
+                    let eval = meta_provider
+                        .filter_by_metadata(&self.key, &val, &Equal)
+                        .await?;
+                    match set_operator {
+                        In => child_evals.push(Include(eval)),
+                        NotIn => child_evals.push(Exclude(eval)),
+                    };
                 }
-                NotIn => Box::pin(
-                    (DirectWhereComparison {
-                        key: self.key.clone(),
-                        comp: WhereComparison::Set(In, metadata_set_value.clone()),
-                    })
-                    .eval(meta_provider),
-                )
-                .await?
-                .flip(),
-            },
+                match set_operator {
+                    In => child_evals
+                        .into_iter()
+                        .fold(SignedRoaringBitmap::empty(), BitOr::bitor),
+                    NotIn => child_evals
+                        .into_iter()
+                        .fold(SignedRoaringBitmap::full(), BitAnd::bitand),
+                }
+            }
         };
         Ok(result)
     }
@@ -477,49 +469,50 @@ impl Operator<MetadataFilteringInput, MetadataFilteringOutput> for MetadataFilte
         let compact_metadata_provider =
             MetadataProvider::from_metadata_segment_reader(&metadata_segement_reader);
 
-        let conjunction: Where;
-        let clause = match (&input.where_clause, &input.where_document_clause) {
-            (Some(wc), Some(wdc)) => {
-                conjunction = Where::conjunction(vec![wc.clone(), wdc.clone()]);
-                &conjunction
-            }
-            (Some(c), None) | (None, Some(c)) => c,
-            _ => {
-                // User does not provide any filter, which is interpreted as a full scan
-                // Create a trivially true where clause, which will lead to a full scan
-                conjunction = Where::conjunction(vec![]);
-                &conjunction
-            }
-        };
-
-        // Filter on log and compact segment, then merge the results with user provided ids
-        let mut filtered_log_oids = clause.eval(&log_metadata_provider).await?;
-        let mut filtered_compact_oids = clause.eval(&compact_metadata_provider).await?
-            & Exclude(metadata_log_reader.domain.clone());
-
-        if let Some(uids) = input.query_ids.as_ref() {
-            filtered_log_oids =
-                filtered_log_oids & Include(metadata_log_reader.search_user_ids(uids));
-            if let Some(reader) = record_segment_reader.as_ref() {
+        // Get offset ids corresponding to user ids
+        let (user_log_oids, user_compact_oids) = if let Some(uids) = input.query_ids.as_ref() {
+            let log_oids = Include(metadata_log_reader.search_user_ids(uids));
+            let compact_oids = if let Some(reader) = record_segment_reader.as_ref() {
                 let mut compact_oids = RoaringBitmap::new();
                 for uid in uids {
                     if let Ok(oid) = reader.get_offset_id_for_user_id(uid.as_str()).await {
                         compact_oids.insert(oid);
                     }
                 }
-                filtered_compact_oids = filtered_compact_oids & Include(compact_oids);
-            }
-        }
+                Include(compact_oids)
+            } else {
+                SignedRoaringBitmap::full()
+            };
+            (log_oids, compact_oids)
+        } else {
+            (SignedRoaringBitmap::full(), SignedRoaringBitmap::full())
+        };
 
-        let materialized_log_oids = match filtered_log_oids {
+        // Filter the offset ids if the where clause is provided
+        let filterd_log_oids = if let Some(clause) = input.where_clause.as_ref() {
+            clause.eval(&log_metadata_provider).await? & user_log_oids
+        } else {
+            user_log_oids
+        };
+
+        let materialized_log_oids = match filterd_log_oids {
             Include(rbm) => rbm,
             Exclude(rbm) => metadata_log_reader.active_domain() - rbm,
+        };
+
+        let filtered_compact_oids = if let Some(clause) = input.where_clause.as_ref() {
+            clause.eval(&compact_metadata_provider).await?
+                & user_compact_oids
+                & Exclude(metadata_log_reader.domain)
+        } else {
+            user_compact_oids & Exclude(metadata_log_reader.domain)
         };
 
         let materialized_compact_oids = match filtered_compact_oids {
             Include(rbm) => rbm,
             Exclude(rbm) => {
                 if let Some(reader) = record_segment_reader.as_ref() {
+                    // TODO: Optimize offset limit performance
                     reader
                         .get_all_offset_ids()
                         .await
@@ -531,21 +524,18 @@ impl Operator<MetadataFilteringInput, MetadataFilteringOutput> for MetadataFilte
             }
         };
 
-        let mut merged_oids = materialized_log_oids.clone() | materialized_compact_oids;
+        let mut merged_oids = materialized_compact_oids | &materialized_log_oids;
         if let Some(skip) = input.offset.as_ref() {
             merged_oids.remove_smallest(*skip as u64);
         }
 
         if let Some(take) = input.limit.as_ref() {
-            let size = merged_oids.len();
-            merged_oids.remove_biggest(size - (*take as u64).min(size));
+            merged_oids = merged_oids.into_iter().take(*take as usize).collect();
         }
-
-        let log_mask = materialized_log_oids & merged_oids.clone();
 
         Ok(MetadataFilteringOutput {
             log_records: input.log_record.clone(),
-            log_mask,
+            log_mask: materialized_log_oids & &merged_oids,
             offset_ids: merged_oids,
         })
     }
@@ -774,8 +764,10 @@ mod test {
             metadata_segment.clone(),
             data.clone(),
             None,
-            Some(where_clause),
-            Some(where_document_clause),
+            Some(Where::conjunction(vec![
+                where_clause,
+                where_document_clause,
+            ])),
             None,
             None,
         );
@@ -952,7 +944,6 @@ mod test {
             data.clone(),
             None,
             Some(where_clause),
-            None,
             None,
             None,
         );
@@ -1155,7 +1146,6 @@ mod test {
             None,
             None,
             None,
-            None,
         );
 
         let res = operator
@@ -1349,7 +1339,6 @@ mod test {
             None,
             None,
             None,
-            None,
         );
 
         let res = operator
@@ -1365,7 +1354,6 @@ mod test {
             metadata_segment.clone(),
             data.clone(),
             Some((31..=90).map(|i| format!("id_{}", i)).collect()),
-            None,
             None,
             None,
             None,
@@ -1394,7 +1382,6 @@ mod test {
             Some(where_clause),
             None,
             None,
-            None,
         );
 
         let res = operator
@@ -1421,7 +1408,6 @@ mod test {
             data.clone(),
             None,
             Some(where_clause),
-            None,
             None,
             None,
         );
@@ -1455,7 +1441,6 @@ mod test {
             Some(where_clause),
             None,
             None,
-            None,
         );
 
         let res = operator
@@ -1481,7 +1466,6 @@ mod test {
             metadata_segment.clone(),
             data.clone(),
             None,
-            None,
             Some(where_doc_clause),
             None,
             None,
@@ -1506,7 +1490,6 @@ mod test {
             record_segment.clone(),
             metadata_segment.clone(),
             data.clone(),
-            None,
             None,
             Some(where_doc_clause),
             None,
@@ -1534,7 +1517,6 @@ mod test {
             data.clone(),
             None,
             Some(where_clause),
-            None,
             None,
             None,
         );
@@ -1581,7 +1563,6 @@ mod test {
             Some(where_clause),
             None,
             None,
-            None,
         );
 
         let res = operator
@@ -1602,7 +1583,6 @@ mod test {
             data.clone(),
             None,
             Some(where_clause),
-            None,
             None,
             None,
         );
@@ -1649,7 +1629,6 @@ mod test {
             Some(where_clause),
             None,
             None,
-            None,
         );
 
         let res = operator
@@ -1664,7 +1643,6 @@ mod test {
             record_segment.clone(),
             metadata_segment.clone(),
             data.clone(),
-            None,
             None,
             None,
             Some(36),
@@ -1684,7 +1662,6 @@ mod test {
             data.clone(),
             None,
             None,
-            None,
             Some(200),
             None,
         );
@@ -1700,7 +1677,6 @@ mod test {
             record_segment.clone(),
             metadata_segment.clone(),
             data.clone(),
-            None,
             None,
             None,
             None,
@@ -1757,7 +1733,6 @@ mod test {
             data.clone(),
             Some((0..90).map(|i| format!("id_{}", i)).collect()),
             Some(where_clause),
-            None,
             Some(2),
             Some(7),
         );
