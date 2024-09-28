@@ -3,7 +3,9 @@ package dbmodel
 import (
 	"time"
 
-	"github.com/chroma-core/chroma/go/pkg/model"
+	"github.com/chroma-core/chroma/go/pkg/model" 
+	// Why are we including this here? What are we referencing something from there?
+	// TODO: Remove above comment.
 
 	"github.com/chroma-core/chroma/go/pkg/types"
 )
