@@ -12,7 +12,7 @@ name = "compaction_service"
 path = "src/bin/compaction_service.rs"
 
 [dependencies]
-rand = "0.8.5"
+rand = "0.9.3"
 murmur3 = "0.5.2"
 schemars = "0.8.16"
 kube = { version = "0.87.1", features = ["runtime", "derive"] }
